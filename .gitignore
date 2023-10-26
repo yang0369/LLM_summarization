@@ -1,0 +1,6 @@
+credential/
+data/
+model/
+
+# ignore cache
+*.pyc

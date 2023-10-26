@@ -1,0 +1,53 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python: learn fundamentals",
+            "type": "python",
+            "request": "launch",
+            "module": "src.langchain_fundamentals",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "env": {
+                "CUDA_LAUNCH_BLOCKING": "1",
+                "PYTHONPATH": "${workspaceFolder}:${workspaceFolder}/src"
+            }
+        },
+        {
+            "name": "Python: Chunking",
+            "type": "python",
+            "request": "launch",
+            "module": "src.load_and_chunk",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}:${workspaceFolder}/src"
+            }
+        },
+        {
+            "name": "Python: Summarize Long Text",
+            "type": "python",
+            "request": "launch",
+            "module": "src.summarize_long",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}:${workspaceFolder}/src"
+            }
+        },
+        {
+            "name": "Python: Summarize Short Text",
+            "type": "python",
+            "request": "launch",
+            "module": "src.summarize_short",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}:${workspaceFolder}/src"
+            }
+        }
+    ]
+}

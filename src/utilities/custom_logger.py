@@ -26,7 +26,7 @@ class CustomLogger(logging.Logger):
                  name: str = __name__,
                  level: int = logging.INFO,
                  stream_console: Any = sys.stdout,
-                 logger_path: Optional[Path] = ROOT / "loggers" / "energy.log",
+                 logger_path: Optional[Path] = None,
                  format: Optional[str] = FORMAT,
                  **kwargs):
         """create and configure logger
