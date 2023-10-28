@@ -6,10 +6,13 @@ This repository is dedicated to the art of summarizing Long text using the power
 The primary goal here is to acquire a deep understanding of utilizing Langchain for processing exceptionally long text, well beyond the typical context window of conventional Language Models. Within this repository, you will find an exploration of Langchain's applications, along with a recommended pipeline for effectively summarizing lengthy textual content.
 
 ## Run App Locally
-1. cd to the source directory:
+1. build environment:
+`pip -r requirement.txt`
+
+2. cd to the source directory:
 `cd src`
 
-2. run streamlit app:
+3. run streamlit app:
 `streamlit run app.py`
 
 ## Reference:
