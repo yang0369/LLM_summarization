@@ -2,241 +2,281 @@ import json
 import os
 import pickle
 import re
+from dataclasses import dataclass
+from typing import Dict, List, Optional
 
 import matplotlib.pyplot as plt
 import networkx as nx
 import numpy as np
 import pydash
+import streamlit as st
 from langchain.embeddings import VertexAIEmbeddings
+from langchain.schema.embeddings import Embeddings
 from langchain.text_splitter import (CharacterTextSplitter,
                                      RecursiveCharacterTextSplitter)
 from networkx.algorithms import community
 from scipy.spatial.distance import cosine
 
-from src.config import config
+from config import config
 from utilities.custom_logger import CustomLogger
 
 logger = CustomLogger()
 
-# load SLR data
-with open(config.SLR_PATH / 'judiciary_32k_test.jsonl', 'r') as json_file:
-    json_list = list(json_file)
 
-slr = dict()
-for idx, json_str in enumerate(json_list):
-    slr[idx] = json.loads(json_str)
+@dataclass
+class ProcessingPipeline:
+    embeddings: Embeddings
+    num_of_tokens: Optional[int] = None
 
-# take 1 example for analysis
-article = slr[0]["judgment"]
-logger.info(article)
+    def process_document(self, document: str) -> List[str]:
+        """process a long document into list of shorter chunks, where each chunk has a unique topic
 
+        Args:
+            document (str): long text
 
-def get_num_of_tokens(text):
-    return len(config.TOKENIZER.tokenize(text))
+        Returns:
+            List[str]: list of chunks
+        """
+        paragraphs = self.split_document(document)
+        embedding_dict = self.get_embeddings(paragraphs)
+        chunks = self.cluster_similar_chunks(embedding_dict)
+        return chunks
 
+    @staticmethod
+    def get_num_of_tokens(text: str) -> int:
+        """get No. of tokens in the text"""
+        return len(config.TOKENIZER.tokenize(text))
 
-# remove chunck's title
-def is_paragraph(txt):
-    """filter the paragraph with index"""
-    if (re.match(r"^[0-9]+ ", txt) is None) and (get_num_of_tokens(txt) < 20):
-        return False
-    else:
-        return True
+    def is_paragraph(self, txt):
+        """filter the paragraph with index"""
+        if (re.match(r"^[0-9]+ ", txt) is None) and (self.get_num_of_tokens(txt) < 20):
+            return False
+        else:
+            return True
 
+    def split_document(self, document: str) -> List[str]:
+        """split the document into chunks with shorter length, this is document-specific.
 
-# 4 x newlines to separate chunks
-article = "".join([p if is_paragraph(p) else "\n\n" for p in article.split("\n\n")])
+        Args:
+            document (str): document, a long text
 
-# separate articles by newlines
-chunks = [ch for ch in article.split("\n\n") if len(ch) > 0]
+        Returns:
+            List[str]: a list of chunks
+        """
+        # remove sub-headers
+        document = "".join([p if self.is_paragraph(p) else "\n\n" for p in document.split("\n\n")])
 
-# ensure No. of tokens in each chunk < max context window
-chunks_require_split = list()
-for i, chunk in enumerate(chunks):
-    if get_num_of_tokens(chunk) > config.CHUNK_SIZE:
-        chunks_require_split.append(i)
+        self.num_of_tokens = self.get_num_of_tokens(document)
 
-text_splitter = CharacterTextSplitter().\
-    from_huggingface_tokenizer(
-    config.TOKENIZER,
-    chunk_size=config.CHUNK_SIZE,
-    chunk_overlap=50,
-    separator="\n",
-    keep_separator=True
-)
+        # split documents by newlines
+        chunks = [ch for ch in document.split("\n\n") if len(ch) > 0]
 
-if len(chunks_require_split) > 0:
-    for i in chunks_require_split:
-        chunks[i] = text_splitter.split_text(chunks[i])
+        # ensure No. of tokens in each chunk < max context window
+        chunks_require_split = list()
+        for i, chunk in enumerate(chunks):
+            if self.get_num_of_tokens(chunk) > config.CHUNK_SIZE:
+                chunks_require_split.append(i)
 
-chunks = pydash.flatten_deep(chunks)
+        text_splitter = CharacterTextSplitter().\
+            from_huggingface_tokenizer(
+            config.TOKENIZER,
+            chunk_size=config.CHUNK_SIZE,
+            chunk_overlap=50,
+            separator="\n",
+            keep_separator=True
+        )
 
-for i, chunk in enumerate(chunks):
-    logger.info(f"chunk size - {i}: {get_num_of_tokens(chunk)}")
+        # fine the chunks which need further split
+        if len(chunks_require_split) > 0:
+            for i in chunks_require_split:
+                chunks[i] = text_splitter.split_text(chunks[i])
 
+        # till this step, the chunks' size already less than window size
+        chunks = pydash.flatten_deep(chunks)
 
-# apply recursive character split each chunk into paragraphs
-text_splitter = RecursiveCharacterTextSplitter(
-    keep_separator=False,
-    chunk_size=(config.CHUNK_SIZE / 4),
-    chunk_overlap=0,
-    length_function=get_num_of_tokens,
-    is_separator_regex=False,
-    separators=["\n\n", "\n", ". "],
-)
+        length_max = max([self.get_num_of_tokens(ch) for ch in chunks])
+        length_min = min([self.get_num_of_tokens(ch) for ch in chunks])
 
-paragraph = [s.page_content for s in text_splitter.create_documents(chunks)]
+        logger.info(f"After splitting by paragrah:\ntotal No. of chunks: {len(chunks)}, max length: {length_max}, min length: {length_min}")
 
-# get the statistics of setences
-length_max = max([get_num_of_tokens(s) for s in paragraph])
-length_min = min([get_num_of_tokens(s) for s in paragraph])
+        # apply recursive character split each chunk into paragraphs
+        text_splitter = RecursiveCharacterTextSplitter(
+            keep_separator=False,
+            chunk_size=(config.CHUNK_SIZE / 2),
+            chunk_overlap=50,
+            length_function=self.get_num_of_tokens,
+            is_separator_regex=False,
+            separators=["\n\n", "\n", ". "],
+        )
 
+        paragraphs = [s.page_content for s in text_splitter.create_documents(chunks)]
 
-# embedding by model
-os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = config.GCP_CRED_PATH
+        # get the statistics of setences
+        length_max = max([self.get_num_of_tokens(s) for s in paragraphs])
+        length_min = min([self.get_num_of_tokens(s) for s in paragraphs])
 
-# # alternative way to add PATH
-# from google.oauth2 import service_account
-# credentials = service_account.Credentials.from_service_account_file('/home/kewen_yang/gptx2/iconic-vine-398108-54c67e9dcc36.json')
+        logger.info(f"After splitting by sentence:\ntotal No. of paragraphs: {len(paragraphs)}, max length: {length_max}, min length: {length_min}")
 
-# # test if credentials created correctly
-# import google.auth
-# credentials, project_id = google.auth.default()
+        return paragraphs
 
-"""The API accepts a maximum of 3,072 input tokens and outputs 768-dimensional vector embeddings.
-Use the following parameters for the text embeddings model textembedding-gecko(it belongs to PaLM Model)
-"""
-embeddings = VertexAIEmbeddings()
+    def get_embeddings(self, paragraphs: List[str]) -> Dict[str, Dict]:
+        """embeddings for each paragraph.
+        The API accepts a maximum of 3,072 input tokens and outputs 768-dimensional vector embeddings.
+        Use the following parameters for the text embeddings model textembedding-gecko(it belongs to PaLM Model)
 
-embedding_dict = dict()
-long_para = list()
+        Args:
+            paragraphs (List[str]): texts
 
-for idx, para in enumerate(paragraph):
-    sen_embedding = embeddings.embed_query(para)
+        Returns:
+            Dict[str, Dict]: embeddings
+        """
 
-    embedding_dict[idx] = {
-        "text": para,
-        "embedding": sen_embedding
-        }
+        embedding_dict = dict()
+        for idx, para in enumerate(paragraphs):
+            sen_embedding = self.embeddings.embed_query(para)
 
-with open(config.OUT_PATH / "embedding_paragraph.json", "w") as f:
-    json.dump(embedding_dict, f, indent=2)
+            embedding_dict[str(idx)] = {
+                "text": para,
+                "embedding": sen_embedding
+                }
 
+        with open(config.OUT_PATH / "embedding_paragraph.json", "w") as f:
+            json.dump(embedding_dict, f, indent=2)
 
-# load embeddings and get the similarity matrix for assessment
-with open(config.OUT_PATH / "embedding_paragraph.json", "r") as f:
-    embedding_dict = json.load(f)
+        # # load embeddings and get the similarity matrix for assessment
+        # with open(config.OUT_PATH / "embedding_paragraph.json", "r") as f:
+        #     embedding_dict = json.load(f)
 
-# Get similarity matrix between the embeddings of the sentences' embeddings
-summary_similarity_matrix = np.zeros((len(embedding_dict), len(embedding_dict)))
-summary_similarity_matrix[:] = np.nan
+        return embedding_dict
 
-for row in range(len(embedding_dict)):
-    for col in range(row, len(embedding_dict)):
-        # Calculate cosine similarity between the two vectors
-        similarity = 1 - cosine(embedding_dict[str(row)]["embedding"], embedding_dict[str(col)]["embedding"])
-        summary_similarity_matrix[row, col] = similarity
-        summary_similarity_matrix[col, row] = similarity
+    def cluster_similar_chunks(self, embedding_dict: Dict[str, Dict]) -> List:
+        """
+        cluster chunks into 1 if they share similar semantic meaning
+        Args:
+            embedding_dict (Dict[str, Dict]): embeddings
 
-plt.figure()
-plt.imshow(summary_similarity_matrix, cmap='Blues')
-plt.savefig(config.OUT_PATH / "similarity_matrix_paragraph.jpg")
+        Returns:
+            List: list of chunks
+        """
+        # Get similarity matrix between the embeddings of the sentences' embeddings
+        summary_similarity_matrix = np.zeros((len(embedding_dict), len(embedding_dict)))
+        summary_similarity_matrix[:] = np.nan
 
+        for row in range(len(embedding_dict)):
+            for col in range(row, len(embedding_dict)):
+                # Calculate cosine similarity between the two vectors
+                similarity = 1 - cosine(embedding_dict[str(row)]["embedding"], embedding_dict[str(col)]["embedding"])
+                summary_similarity_matrix[row, col] = similarity
+                summary_similarity_matrix[col, row] = similarity
 
-# Run the community detection algorithm
-def get_topics(title_similarity, num_topics = 8, bonus_constant = 0.25, min_size = 3):
+        plt.figure()
+        plt.imshow(summary_similarity_matrix, cmap='Blues')
+        plt.savefig(config.OUT_PATH / "similarity_matrix_paragraph.jpg")
 
-  proximity_bonus_arr = np.zeros_like(title_similarity)
-  for row in range(proximity_bonus_arr.shape[0]):
-    for col in range(proximity_bonus_arr.shape[1]):
-      if row == col:
-        proximity_bonus_arr[row, col] = 0
-      else:
-        proximity_bonus_arr[row, col] = 1/(abs(row-col)) * bonus_constant
+        num_topics = self.num_of_tokens // config.COMMUNITY_SIZE
+        topics_out = self.get_topics(
+            summary_similarity_matrix,
+            num_topics=num_topics,
+            bonus_constant=0.2,
+            min_size=10)
+        chunk_topics = topics_out['chunk_topics']
+        topics = topics_out['topics']
 
-  title_similarity += proximity_bonus_arr
+        # Plot a heatmap of this array
+        plt.figure(figsize=(10, 4))
+        plt.imshow(np.array(chunk_topics).reshape(1, -1), cmap='tab20')
+        # Draw vertical black lines for every 1 of the x-axis
+        for i in range(1, len(chunk_topics)):
+            plt.axvline(x=i - 0.5, color='black', linewidth=0.5)
 
-  title_nx_graph = nx.from_numpy_array(title_similarity)
+        plt.savefig(config.OUT_PATH / "clustering_paragraph.jpg")
 
-  desired_num_topics = num_topics
-  # Store the accepted partitionings
-  topics_title_accepted = []
+        chunks = list()
+        for chu_ids in topics:
+            chunk = "\n".join([embedding_dict[str(i)]["text"] for i in chu_ids])
+            chunks.append(chunk)
 
-  resolution = 0.85
-  resolution_step = 0.01
-  iterations = 40
+        # with open(config.OUT_PATH / "chunks", "wb") as fp:
+        #     pickle.dump(chunks, fp)
 
-  # Find the resolution that gives the desired number of topics
-  topics_title = []
-  while len(topics_title) not in [desired_num_topics, desired_num_topics + 1, desired_num_topics + 2]:
-    topics_title = community.louvain_communities(title_nx_graph, weight = 'weight', resolution = resolution, seed=1)
-    resolution += resolution_step
-  topic_sizes = [len(c) for c in topics_title]
-  sizes_sd = np.std(topic_sizes)
-  modularity = community.modularity(title_nx_graph, topics_title, weight = 'weight', resolution = resolution)
+        return chunks
 
-  lowest_sd_iteration = 0
-  # Set lowest sd to inf
-  lowest_sd = float('inf')
+    def get_topics(self,
+                   title_similarity: np.ndarray,
+                   num_topics: int=8,
+                   bonus_constant: float=0.25,
+                   min_size: int=3) -> Dict[str, List]:
+        """calculate if chunks belong to same cluster based on louvain community detection algorithm
 
-  for i in range(iterations):
-    topics_title = community.louvain_communities(title_nx_graph, weight = 'weight', resolution = resolution, seed=1)
-    modularity = community.modularity(title_nx_graph, topics_title, weight = 'weight', resolution = resolution)
+        Args:
+            title_similarity (np.ndarray): cosine similarity between chunks
+            num_topics (int, optional): number of chunks in the end. Defaults to 8.
+            bonus_constant (float, optional): coefficient. Defaults to 0.25.
+            min_size (int, optional): minimum size of a chunk. Defaults to 3.
 
-    # Check SD
-    topic_sizes = [len(c) for c in topics_title]
-    sizes_sd = np.std(topic_sizes)
+        Returns:
+            _type_: _description_
+        """
+        proximity_bonus_arr = np.zeros_like(title_similarity)
+        for row in range(proximity_bonus_arr.shape[0]):
+            for col in range(proximity_bonus_arr.shape[1]):
+                if row == col:
+                    proximity_bonus_arr[row, col] = 0
+                else:
+                    proximity_bonus_arr[row, col] = 1/(abs(row-col)) * bonus_constant
 
-    topics_title_accepted.append(topics_title)
+        title_similarity += proximity_bonus_arr
 
-    if sizes_sd < lowest_sd and min(topic_sizes) < min_size:
-      lowest_sd_iteration = i
-      lowest_sd = sizes_sd
+        title_nx_graph = nx.from_numpy_array(title_similarity)
 
-  # Set the chosen partitioning to be the one with highest modularity
-  topics_title = topics_title_accepted[lowest_sd_iteration]
-  print(f'Best SD: {lowest_sd}, Best iteration: {lowest_sd_iteration}')
+        desired_num_topics = num_topics
+        # Store the accepted partitionings
+        topics_title_accepted = []
 
-  topic_id_means = [sum(e)/len(e) for e in topics_title]
-  # Arrange title_topics in order of topic_id_means
-  topics_title = [list(c) for _, c in sorted(zip(topic_id_means, topics_title), key = lambda pair: pair[0])]
-  # Create an array denoting which topic each chunk belongs to
-  chunk_topics = [None] * title_similarity.shape[0]
-  for i, c in enumerate(topics_title):
-    for j in c:
-      chunk_topics[j] = i
+        resolution = 0.85
+        resolution_step = 0.01
+        iterations = 40
 
-  return {
-    'chunk_topics': chunk_topics,
-    'topics': topics_title
-    }
+        # Find the resolution that gives the desired number of topics
+        topics_title = []
+        while len(topics_title) not in [desired_num_topics, desired_num_topics + 1, desired_num_topics + 2]:
+            topics_title = community.louvain_communities(title_nx_graph, weight = 'weight', resolution = resolution, seed=1)
+            resolution += resolution_step
+        topic_sizes = [len(c) for c in topics_title]
+        sizes_sd = np.std(topic_sizes)
 
+        lowest_sd_iteration = 0
+        # Set lowest sd to inf
+        lowest_sd = float('inf')
 
-num_topics = get_num_of_tokens(article) // config.COMMUNITY_SIZE
-topics_out = get_topics(summary_similarity_matrix,
-                        num_topics=num_topics,
-                        bonus_constant=0.2,
-                        min_size=10)
-chunk_topics = topics_out['chunk_topics']
-topics = topics_out['topics']
+        for i in range(iterations):
+            topics_title = community.louvain_communities(title_nx_graph, weight = 'weight', resolution = resolution, seed=1)
 
-# Plot a heatmap of this array
-plt.figure(figsize=(10, 4))
-plt.imshow(np.array(chunk_topics).reshape(1, -1), cmap='tab20')
-# Draw vertical black lines for every 1 of the x-axis
-for i in range(1, len(chunk_topics)):
-    plt.axvline(x=i - 0.5, color='black', linewidth=0.5)
+            # Check SD
+            topic_sizes = [len(c) for c in topics_title]
+            sizes_sd = np.std(topic_sizes)
 
-plt.savefig(config.OUT_PATH / "clustering_paragraph.jpg")
+            topics_title_accepted.append(topics_title)
 
-chunks = list()
-for chu_ids in topics:
-    chunk = "\n".join([embedding_dict[str(i)]["text"] for i in chu_ids])
-    chunks.append(chunk)
+            if sizes_sd < lowest_sd and min(topic_sizes) < min_size:
+                lowest_sd_iteration = i
+                lowest_sd = sizes_sd
 
+        # Set the chosen partitioning to be the one with highest modularity
+        topics_title = topics_title_accepted[lowest_sd_iteration]
+        logger.info(f'Best SD: {lowest_sd}, Best iteration: {lowest_sd_iteration}')
 
-with open(config.OUT_PATH / "chunks", "wb") as fp:
-    pickle.dump(chunks, fp)
+        topic_id_means = [sum(e)/len(e) for e in topics_title]
+        # Arrange title_topics in order of topic_id_means
+        topics_title = [list(c) for _, c in sorted(zip(topic_id_means, topics_title), key = lambda pair: pair[0])]
+        # Create an array denoting which topic each chunk belongs to
+        chunk_topics = [None] * title_similarity.shape[0]
+        for i, c in enumerate(topics_title):
+            for j in c:
+                chunk_topics[j] = i
+
+        return {'chunk_topics': chunk_topics,
+                'topics': topics_title}
 
 # gcloud init:
 # https://cloud.google.com/sdk/docs/initializing

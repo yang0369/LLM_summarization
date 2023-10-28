@@ -27,6 +27,13 @@ TOKENIZER = LlamaTokenizerFast.from_pretrained(TOKENIZER_PATH)
 
 # add credential path
 os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = GCP_CRED_PATH
+# # alternative way to add PATH
+# from google.oauth2 import service_account
+# credentials = service_account.Credentials.from_service_account_file(GCP_CRED_PATH)
+
+# # test if credentials created correctly
+# import google.auth
+# credentials, project_id = google.auth.default()
 
 # verify if credential loaded successfully
 credentials, project_id = google.auth.default()
@@ -37,7 +44,7 @@ if project_id == "iconic-vine-398108":
 set_llm_cache(InMemoryCache())
 
 CHUNK_SIZE = 1000
-COMMUNITY_SIZE = CHUNK_SIZE / 3
+COMMUNITY_SIZE = CHUNK_SIZE / 2
 SUMMARY_SIZE = 100
 
 # test samples
