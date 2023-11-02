@@ -7,8 +7,9 @@ from streamlit.components.v1 import html
 
 from load_and_chunk import ProcessingPipeline
 from summarize_long import summarize_long_text_by_custom
+import time
 
-st.title('Long Text Summarization')
+st.title('Trailblazer Demo: Long Text Summarization')
 
 input_text = st.text_area('Please paste the text you want to summarise below')
 uploaded_file = st.file_uploader("Or choose a file (supported type: .txt)")
@@ -28,19 +29,22 @@ if_summarise = st.button("Summarize", type="primary")
 
 if if_summarise and len(input_text) > 0:
     with st.container():
+        start = time.time()
         if len(input_text.split(" ")) > 500:
             pro = ProcessingPipeline(VertexAIEmbeddings())
             chunks = pro.process_document(input_text)
 
             # temporarily summarize for first 10 chunks due to small context window of VertexAI model
-            chunks = chunks[:10]
+            chunks = chunks[:2]
             split_docs = [Document(page_content=text, metadata={"source": "local"}) for text in chunks]
         else:
             split_docs = [Document(page_content=input_text, metadata={"source": "local"})]
 
         summary = summarize_long_text_by_custom(split_docs)
+        end = time.time()
 
         st.divider()
         st.header('Summary:', divider='rainbow')
         st.write(f'{summary}')
         st.write(f'Number Of Words: {len(summary.split(" "))}')
+        st.write(f'Total Time Taken: {end - start} seconds')

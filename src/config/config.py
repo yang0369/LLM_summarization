@@ -20,10 +20,10 @@ OUT_PATH = DATA_PATH / "artifacts"
 MODEL_PATH = ROOT / "model"
 CREDENTIAL_PATH = ROOT / "credential"
 GCP_CRED_PATH = (CREDENTIAL_PATH / "gcp_credential.json").as_posix()
-TOKENIZER_PATH = (MODEL_PATH / "Llama-2-13b-chat-hf").as_posix()
+LLAMA2 = (MODEL_PATH / "Llama-2-13b-chat-hf").as_posix()
 
 # load tokenizer
-TOKENIZER = LlamaTokenizerFast.from_pretrained(TOKENIZER_PATH)
+TOKENIZER = LlamaTokenizerFast.from_pretrained(LLAMA2)
 
 # add credential path
 os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = GCP_CRED_PATH

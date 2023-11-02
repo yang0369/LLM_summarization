@@ -17,6 +17,18 @@
             }
         },
         {
+            "name": "Python: run llama2",
+            "type": "python",
+            "request": "launch",
+            "module": "src.llama2",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "env": {
+                "CUDA_LAUNCH_BLOCKING": "1",
+                "PYTHONPATH": "${workspaceFolder}:${workspaceFolder}/src"
+            }
+        },
+        {
             "name": "Python: Chunking",
             "type": "python",
             "request": "launch",

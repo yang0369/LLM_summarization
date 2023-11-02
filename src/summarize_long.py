@@ -18,7 +18,7 @@ logger = CustomLogger()
 
 # OPTION_1: BY LANGCHAIN MAP REDUCE
 # llm chain
-@st.cache_data
+# @st.cache_data
 def summarize_long_text_by_langchain(_docs: List[Document]) -> str:
     document_variable_name = "text"
     map_prompt_template = """Wite a concise summary with less than 100 words for the following text:
@@ -66,7 +66,7 @@ def summarize_long_text_by_langchain(_docs: List[Document]) -> str:
 
 
 # OPTION_2: BY CUSTOM WAY
-@st.cache_data
+# @st.cache_data
 def summarize_long_text_by_custom(_docs: List[Document]) -> str:
     def get_short_sum_chain(template: str) -> StuffDocumentsChain:
         """ prepare a summarization chain for single text
@@ -91,7 +91,7 @@ def summarize_long_text_by_custom(_docs: List[Document]) -> str:
         logger.info(str(idx) + "-->" + summ["output_text"] + "\n")
 
     # reduce all summarizations into one single summary
-    reduce_template = "Write a 1 sentence summary for the following text: {text}. CONCISE SUMMARY:"
+    reduce_template = "Write a 2 sentence summary for the following text: {text}. CONCISE SUMMARY:"
     reduce_chain = get_short_sum_chain(reduce_template)
 
     combined = Document(page_content=" ".join([s.strip() for s in summaries.values()]), metadata={"source": "local"})
@@ -106,7 +106,7 @@ def summarize_long_text_by_custom(_docs: List[Document]) -> str:
 
 
 if __name__ == '__main__':
-    # # load SLR data
+    # # load test data
     # import json
     # import pickle
     # with open(config.SLR_PATH / 'judiciary_32k_test.jsonl', 'r') as json_file:
