@@ -20,7 +20,7 @@
             "name": "Python: run llama2",
             "type": "python",
             "request": "launch",
-            "module": "src.llama2",
+            "module": "src.summarise_by_llama2",
             "console": "integratedTerminal",
             "justMyCode": false,
             "env": {
