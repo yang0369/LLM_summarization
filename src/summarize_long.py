@@ -11,6 +11,7 @@ from langchain.prompts import PromptTemplate
 
 from config import config
 from load_and_chunk import ProcessingPipeline
+from project.src.search.util.util_eval import post_process
 from utilities.custom_logger import CustomLogger
 
 logger = CustomLogger()
@@ -67,42 +68,161 @@ def summarize_long_text_by_langchain(_docs: List[Document]) -> str:
 
 # OPTION_2: BY CUSTOM WAY
 # @st.cache_data
-def summarize_long_text_by_custom(_docs: List[Document]) -> str:
-    def get_short_sum_chain(template: str) -> StuffDocumentsChain:
-        """ prepare a summarization chain for single text
-        """
-        prompt = PromptTemplate(template=template, input_variables=["text"])
+from transformers import LlamaTokenizerFast, LlamaForCausalLM
+import torch
 
-        # Define LLM chain
-        llm = ChatVertexAI()
-        llm_chain = LLMChain(llm=llm, prompt=prompt)
+def summarize_long_text_by_custom(_docs: List[Document], max_tokens) -> str:
 
-        # Define StuffDocumentsChain
-        return StuffDocumentsChain(llm_chain=llm_chain)
+    MODEL_PATH = "/raid2/domain_ft/models/llama2/Llama-2-13b-chat-hf-slr-qlora-merged-2"
+    data_type = torch.float16
+    # Define LLM chain
+    llm = LlamaForCausalLM.from_pretrained(
+                MODEL_PATH,
+                torch_dtype=data_type,
+                return_dict=True,
+                load_in_8bit=True,
+                device_map="auto",
+                low_cpu_mem_usage=True,
+            )
 
-    # map summarization for each chunk
-    map_template = "Write 1 sentence concise summary for the following text: {text}. CONCISE SUMMARY:"
-    map_chain = get_short_sum_chain(map_template)
+    tokenizer = LlamaTokenizerFast.from_pretrained(MODEL_PATH)
+    facts = []
+    holdings = []
 
-    summaries = {}
-    for idx, doc in enumerate(_docs):
-        summ = map_chain({"input_documents": [doc]})
-        summaries[idx] = summ["output_text"]
-        logger.info(str(idx) + "-->" + summ["output_text"] + "\n")
+    logger.info("############# summarize for facts #############")
+    for id, seg in enumerate(_docs):
+        torch.cuda.empty_cache()
+        seg_len = tokenizer.encode(seg, return_tensors='pt').cuda().shape[1]
+        logger.info(f"The original size of the {id}th chunk: {seg_len}")
+        # head = [
+        #     "<s>[INST] <<SYS>>\n",
+        #     "You are an experienced and helpful lawyer. ",
+        #     "You are given a text chunk (delimited by triple backticks) taken from a long legal judgment document.\n",
+        #     "<</SYS>>\n\n",
+        #     "Write a concise, well-structured and professional extractive summary that highlights the facts of the case whenever possible. ",
+        #     "Ensure that the summary can inform a legal professional of the case's facts without requiring reference to the full judgment. ",
+        #     "The summary needs to be accurate and based on the text. Double check against the original document.\n\n",
+        #     "Text:\n",
+        #     "```\n"
+        #     ]
+        head = [
+            "<s>[INST] <<SYS>>\n",
+            "You are an experienced and helpful lawyer. ",
+            "You are given a text chunk (delimited by triple backticks) taken from a legal judgment document.\n",
+            "<</SYS>>\n\n",
+            "Extract the legal facts from the text chunk. ",
+            "Ensure that:\n",
+            "1. the extracted facts include all the key legal facts.\n",
+            "2. the extracted facts align accurately with the original text.\n",
+            "3. the extracted facts are as concise as possible.\n\n",
+            "Text:\n",
+            "```\n"
+            ]
+        tail = "\n```\n\n[/INST]\n\nThe extracted facts:\n"
+        prompt = "".join(head) + seg + tail
+        prompt_ids = tokenizer.encode(prompt, return_tensors='pt').cuda()
+        prompt_len = prompt_ids.shape[1]
 
-    # reduce all summarizations into one single summary
-    reduce_template = "Write a 2 sentence summary for the following text: {text}. CONCISE SUMMARY:"
-    reduce_chain = get_short_sum_chain(reduce_template)
+        penalty_factor = (seg_len // 100) ** 1.2 * 0.2
+        adjust_ratio = 3 + penalty_factor
+        new_token_len = int(seg_len / adjust_ratio)
+        # word_max is indicated in config
+        max_new_tokens = min(new_token_len, 4000 - prompt_len)
+        min_new_tokens = (max_new_tokens + 1) // 2
+        temperature = max(0.0001, 0.5)
 
-    combined = Document(page_content=" ".join([s.strip() for s in summaries.values()]), metadata={"source": "local"})
-    summary = reduce_chain({"input_documents": [combined]})
+        with torch.no_grad():
+            pred = llm.generate(
+                prompt_ids,
+                do_sample=True,
+                max_new_tokens=max_new_tokens,
+                min_new_tokens=min_new_tokens,
+                top_p=1.0,
+                top_k=5,
+                temperature=temperature,
+                repetition_penalty=1.0,
+                bad_words_ids=None,
+                pad_token_id=tokenizer.eos_token_id,
+                num_return_sequences=1,
+                remove_invalid_values=True,
+            )
 
-    # logger.info("\n\ninput text:\n")
-    # for doc in _docs:
-    #     logger.info(f"\n{doc.page_content}\n")
-    logger.info(f"\nsummarization: \n{summary['output_text'].strip()}\n")
+        pred_tokens = [output[prompt_len:] for output in pred]
+        summary = tokenizer.batch_decode(pred_tokens, skip_special_tokens=True)[0]
+        summary = post_process(summary)
+        logger.info(f"The size after summarization: {len(tokenizer.encode(summary))}")
+        if tokenizer.encode(summary, return_tensors='pt').shape[0] > 10:
+            facts.append(summary)
 
-    return summary['output_text'].strip()
+        del seg, seg_len, prompt_ids, pred, pred_tokens, summary
+        torch.cuda.empty_cache()
+
+    logger.info("############# summarize for holdings #############")
+    for id, seg in enumerate(_docs):
+        torch.cuda.empty_cache()
+        seg_len = tokenizer.encode(seg, return_tensors='pt').cuda().shape[1]
+        logger.info(f"The original size of the {id}th chunk: {seg_len}")
+        head = [
+            "<s>[INST] <<SYS>>\n",
+            "You are an experienced and helpful lawyer. ",
+            "You are given a text chunk (delimited by triple backticks) taken from a legal judgment document.\n",
+            "<</SYS>>\n\n",
+            "Extract the judge's decisions from the text chunk. ",
+            "Ensure that:\n",
+            "1. the extracted judge's decisions include all the key points.\n",
+            "2. the extracted judge's decisions align accurately with the original text.\n",
+            "3. the extracted judge's decisions are as concise as possible.\n\n",
+            "Text:\n",
+            "```\n"
+        ]
+        tail = "\n```\n\n[/INST]\n\nThe extracted judge's decisions:\n"
+        prompt = "".join(head) + seg + tail
+        prompt_ids = tokenizer.encode(prompt, return_tensors='pt').cuda()
+        prompt_len = prompt_ids.shape[1]
+
+        penalty_factor = (seg_len // 100) ** 1.2 * 0.2
+        adjust_ratio = 2 + penalty_factor
+        new_token_len = int(seg_len / adjust_ratio)
+        # word_max is indicated in config
+        max_new_tokens = min(new_token_len, 4000 - prompt_len)
+        min_new_tokens = (max_new_tokens + 1) // 2
+        temperature = max(0.0001, 0.5)
+
+        with torch.no_grad():
+            pred = llm.generate(
+                prompt_ids,
+                do_sample=True,
+                max_new_tokens=max_new_tokens,
+                min_new_tokens=min_new_tokens,
+                top_p=1.0,
+                top_k=5,
+                temperature=temperature,
+                repetition_penalty=1.0,
+                bad_words_ids=None,
+                pad_token_id=tokenizer.eos_token_id,
+                num_return_sequences=1,
+                remove_invalid_values=True,
+            )
+
+        pred_tokens = [output[prompt_len:] for output in pred]
+        summary = tokenizer.batch_decode(pred_tokens, skip_special_tokens=True)[0]
+        summary = post_process(summary)
+        logger.info(f"The size after summarization: {len(tokenizer.encode(summary))}")
+        if tokenizer.encode(summary, return_tensors='pt').shape[0] > 10:
+            facts.append(summary)
+        holdings.append(summary)
+
+        del seg, seg_len, prompt_ids, pred, pred_tokens, summary
+        torch.cuda.empty_cache()
+
+    facts = "\n".join(facts)
+    holdings = "\n".join(holdings)
+
+    # join the segments summaries by default
+    sum_gen_d = {"segments": None}
+    sum_gen_d["summary"] = facts + "\n" + holdings
+
+    return sum_gen_d
 
 
 if __name__ == '__main__':
