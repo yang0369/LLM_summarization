@@ -20,7 +20,7 @@ OUT_PATH = DATA_PATH / "artifacts"
 MODEL_PATH = ROOT / "model"
 CREDENTIAL_PATH = ROOT / "credential"
 GCP_CRED_PATH = (CREDENTIAL_PATH / "gcp_credential.json").as_posix()
-LLAMA2 = (MODEL_PATH / "Llama-2-7b-chat-hf").as_posix()
+LLAMA2 = "/raid2/domain_ft/models/llama2/Llama-2-13b-chat-hf-slr-qlora-merged-2"
 
 # load tokenizer
 TOKENIZER = LlamaTokenizerFast.from_pretrained(LLAMA2)
@@ -43,9 +43,9 @@ if project_id == "iconic-vine-398108":
 # enable in-memory caching
 set_llm_cache(InMemoryCache())
 
-CHUNK_SIZE = 1000
+CHUNK_SIZE = 3000
 COMMUNITY_SIZE = CHUNK_SIZE / 2
-SUMMARY_SIZE = 100
+SUMMARY_SIZE = 300
 
 # test samples
 DOCS = list()
