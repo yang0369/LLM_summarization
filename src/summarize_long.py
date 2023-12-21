@@ -8,13 +8,80 @@ from langchain.chat_models import ChatVertexAI
 from langchain.docstore.document import Document
 from langchain.embeddings import VertexAIEmbeddings
 from langchain.prompts import PromptTemplate
+from difflib import SequenceMatcher
 
 from config import config
 from load_and_chunk import ProcessingPipeline
-from project.src.search.util.util_eval import post_process
 from utilities.custom_logger import CustomLogger
 
 logger = CustomLogger()
+
+
+def similar(a, b):
+    return SequenceMatcher(None, a, b).ratio()
+
+
+def is_last_paragraph_bad_case(paragraphs):
+
+    # empty paragraph at the end
+    if len(paragraphs[-1]) < 1:
+        return True
+
+    # incomplete paragraph at the end
+    if not paragraphs[-1][-1] in ['.', '?', '!', ';']:
+        return True
+
+    # check last paragraph is similar or repetitive to previous paragraph
+    n = 1  # previous paragraph of last one
+    while n < len(paragraphs):
+        n += 1
+        if len(paragraphs[-n]) > 0:
+            if similar(paragraphs[-1], paragraphs[-n]) > 0.95:
+                return True
+            else:
+                return False
+    return False
+
+
+def remove_similar_paragraphs(paragraphs):
+    new_paragraphs = []
+    is_unique = True
+    for i in range(len(paragraphs)):
+        # keep empty line
+        if len(paragraphs[i]) == 0:
+            if is_unique:
+                new_paragraphs.append(paragraphs[i])
+            continue
+
+        is_unique = True
+        for j in range(len(new_paragraphs)):
+            if similar(paragraphs[i], new_paragraphs[j]) > 0.95:
+                if len(new_paragraphs[j]) < 1:
+                    continue
+                is_unique = False
+                break
+        if is_unique:
+            new_paragraphs.append(paragraphs[i])
+
+    return new_paragraphs
+
+
+def post_process(text):
+    """ Post-process GPT-X generated text
+        :return cleaned text
+    """
+    paragraphs = text.split('\n')
+
+    while len(paragraphs) > 1:
+        if is_last_paragraph_bad_case(paragraphs):
+            paragraphs.pop()
+        else:
+            break
+
+    # remove similar or repetitive paragraphs inside the paragraphs
+    new_paragraphs = remove_similar_paragraphs(paragraphs)
+
+    return '\n'.join(new_paragraphs)
 
 
 # OPTION_1: BY LANGCHAIN MAP REDUCE
