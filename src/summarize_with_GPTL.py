@@ -215,7 +215,7 @@ def benchmark(testset: list, task: str):
 if __name__ == "__main__":
 
     # Load testset file
-    input_dir = "/home/kewen_yang/gptx2/SLR_test_100_151023.jsonl"
+    input_dir = "/home/kewen_yang/gptx2/SLR_Short.jsonl"
     testset = load_json_SLR_dataset(input_dir)
 
     start = time.time()

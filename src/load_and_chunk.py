@@ -60,6 +60,7 @@ class ProcessingPipeline:
 
         apply_clsutering = True
 
+        selected_chunks = []
         for i in chunks_require_split:
             if not apply_clsutering:
                 text_splitter = CharacterTextSplitter().\
@@ -70,20 +71,23 @@ class ProcessingPipeline:
                     separator="\n\n",
                     keep_separator=True
                 )
-                chunks[i] = text_splitter.split_text(chunks[i])
+                logger.info(f"partition the {i}th chunk due to large size:")
+                splits = text_splitter.split_text(chunks[i])
+                logger.info(f"partitioned long chunk into {len(splits)} sub-chunks")
+                selected_chunks.extend(splits)
 
             else:
+                logger.info(f"partition the {i}th chunk due to large size:")
                 segments = chunks[i].split("\n\n")
                 if len(segments) <= 2:
                     if len(segments) < 2:
                         raise Exception("paragraph - {i} is too long and cannot be split")
-                    chunks[i] = segments
+                    selected_chunks.extend(segments)
                 else:
-                    logger.info(f"partition the {i}th chunk due to large size:")
-                    chunks[i] = self.partition_segments(segments)
+                    selected_chunks.extend(self.partition_segments(segments))
                     logger.info(f"partition for the {i}th chunk is completed")
 
-        chunks = pydash.flatten_deep(chunks)
+        chunks = selected_chunks
 
         length_max = max([self.get_num_of_tokens(ch) for ch in chunks])
         length_min = min([self.get_num_of_tokens(ch) for ch in chunks])
