@@ -9,6 +9,7 @@ from langchain.docstore.document import Document
 from langchain.embeddings import VertexAIEmbeddings
 from langchain.prompts import PromptTemplate
 from difflib import SequenceMatcher
+from langchain.text_splitter import RecursiveCharacterTextSplitter
 
 from config import config
 from load_and_chunk import ProcessingPipeline
@@ -194,7 +195,7 @@ def summarize_long_text_by_custom(_docs: List[Document], max_tokens) -> str:
         adjust_ratio = 3 + penalty_factor
         new_token_len = int(seg_len / adjust_ratio)
         # word_max is indicated in config
-        max_new_tokens = min(new_token_len, 4000 - prompt_len)
+        max_new_tokens = min(new_token_len, config.MAX_TOKEN - prompt_len)
         min_new_tokens = (max_new_tokens + 1) // 2
         temperature = max(0.0001, 0.5)
 
@@ -251,7 +252,7 @@ def summarize_long_text_by_custom(_docs: List[Document], max_tokens) -> str:
         adjust_ratio = 2 + penalty_factor
         new_token_len = int(seg_len / adjust_ratio)
         # word_max is indicated in config
-        max_new_tokens = min(new_token_len, 4000 - prompt_len)
+        max_new_tokens = min(new_token_len, config.MAX_TOKEN - prompt_len)
         min_new_tokens = (max_new_tokens + 1) // 2
         temperature = max(0.0001, 0.5)
 
@@ -298,13 +299,12 @@ from transformers import LlamaTokenizerFast, LlamaForCausalLM
 import torch
 
 
-def summarize_long_text_by_llama2(_docs: List[Document], max_tokens) -> str:
+def summarize_long_text_by_llama2(_docs: List[Document]) -> str:
 
-    MODEL_PATH = "/raid2/domain_ft/models/llama2/Llama-2-13b-chat-hf-slr-qlora-merged-2"
     data_type = torch.float16
     # Define LLM chain
     llm = LlamaForCausalLM.from_pretrained(
-                MODEL_PATH,
+                config.LLAMA2,
                 torch_dtype=data_type,
                 return_dict=True,
                 load_in_8bit=True,
@@ -312,7 +312,7 @@ def summarize_long_text_by_llama2(_docs: List[Document], max_tokens) -> str:
                 low_cpu_mem_usage=True,
             )
 
-    tokenizer = LlamaTokenizerFast.from_pretrained(MODEL_PATH)
+    tokenizer = LlamaTokenizerFast.from_pretrained(config.LLAMA2)
     facts = []
     holdings = []
 
@@ -339,12 +339,12 @@ def summarize_long_text_by_llama2(_docs: List[Document], max_tokens) -> str:
         prompt_ids = tokenizer.encode(prompt, return_tensors='pt').cuda()
         prompt_len = prompt_ids.shape[1]
 
-        token_limit = min(seg_len, 4000)
+        token_limit = min(seg_len, config.MAX_TOKEN)
         penalty_factor = (token_limit - 12000) / 12000 * 0.66
         adjust_ratio = 11 * (1 + penalty_factor)
         new_token_len = int(token_limit / adjust_ratio)
         # word_max is indicated in config
-        max_new_tokens = min(new_token_len, 4000 - prompt_len)
+        max_new_tokens = min(new_token_len, config.MAX_TOKEN - prompt_len)
         min_new_tokens = (max_new_tokens + 1) // 2
 
         with torch.no_grad():
@@ -411,7 +411,7 @@ def summarize_long_text_by_llama2(_docs: List[Document], max_tokens) -> str:
         prompt_ids = tokenizer.encode(prompt, return_tensors='pt').cuda()
         prompt_len = prompt_ids.shape[1]
 
-        max_new_tokens = min(seg_len, 4000 - prompt_len)
+        max_new_tokens = min(seg_len, config.MAX_TOKEN - prompt_len)
         min_new_tokens = (max_new_tokens + 1) // 2
 
         with torch.no_grad():
@@ -463,12 +463,12 @@ def summarize_long_text_by_llama2(_docs: List[Document], max_tokens) -> str:
         prompt_ids = tokenizer.encode(prompt, return_tensors='pt').cuda()
         prompt_len = prompt_ids.shape[1]
 
-        token_limit = min(seg_len, 4000)
+        token_limit = min(seg_len, config.MAX_TOKEN)
         penalty_factor = (token_limit - 12000) / 12000 * 0.66
         adjust_ratio = 7 * (1 + penalty_factor)
         new_token_len = int(token_limit / adjust_ratio)
         # word_max is indicated in config
-        max_new_tokens = min(new_token_len, 4000 - prompt_len)
+        max_new_tokens = min(new_token_len, config.MAX_TOKEN - prompt_len)
         min_new_tokens = (max_new_tokens + 1) // 2
 
         with torch.no_grad():
@@ -525,7 +525,7 @@ def summarize_long_text_by_llama2(_docs: List[Document], max_tokens) -> str:
         prompt_ids = tokenizer.encode(prompt, return_tensors='pt').cuda()
         prompt_len = prompt_ids.shape[1]
 
-        max_new_tokens = min(seg_len, 4000 - prompt_len)
+        max_new_tokens = min(seg_len, config.MAX_TOKEN - prompt_len)
         min_new_tokens = (max_new_tokens + 1) // 2
 
         with torch.no_grad():

@@ -158,24 +158,13 @@ def extract_text_from_json(jsondict: list) -> str:
     return text
 
 
-def summarize_long_by_clustering(text_or_jsondict, max_tokens):
+def summarize_long_by_clustering(text_or_jsondict):
 
     pro = ProcessingPipeline(VertexAIEmbeddings())
     chunks = pro.process_document(text_or_jsondict)
-    sum_gen_d = summarize_long_text_by_llama2(chunks, max_tokens)
+    sum_gen_d = summarize_long_text_by_llama2(chunks)
 
     return sum_gen_d
-
-
-def summarize_general(text_or_jsondict,
-                      max_tokens: int):
-
-    if isinstance(text_or_jsondict, list):
-        text_or_jsondict = extract_text_from_json(text_or_jsondict)
-
-    sum_output = summarize_long_by_clustering(text_or_jsondict, max_tokens)
-
-    return sum_output
 
 
 def benchmark(testset: list, task: str):
@@ -184,12 +173,9 @@ def benchmark(testset: list, task: str):
     output_lst = []
     all_scores = []
 
-    max_tokens = 4000
-
     # Benchmark loop
     for n, data in enumerate(testset):
-        generated_text = summarize_general(
-            data["input"], max_tokens)["summary"]
+        generated_text = summarize_long_by_clustering(data["input"])["summary"]
 
         print(f"{80 * '-'}\n#{n + 1}: {generated_text}", flush=True)
 
@@ -229,7 +215,7 @@ def benchmark(testset: list, task: str):
 if __name__ == "__main__":
 
     # Load testset file
-    input_dir = "/home/kewen_yang/gptx2/SLR_Short.jsonl"
+    input_dir = "/home/kewen_yang/gptx2/SLR_test_100_151023.jsonl"
     testset = load_json_SLR_dataset(input_dir)
 
     start = time.time()

@@ -1,13 +1,13 @@
 import os
+import re
 from pathlib import Path
 
 import google.auth
 from langchain.cache import InMemoryCache
+from langchain.docstore.document import Document
 from langchain.globals import set_llm_cache
 from transformers import LlamaTokenizerFast
-
 from utilities.custom_logger import CustomLogger
-from langchain.docstore.document import Document
 
 logger = CustomLogger()
 
@@ -21,6 +21,7 @@ MODEL_PATH = ROOT / "model"
 CREDENTIAL_PATH = ROOT / "credential"
 GCP_CRED_PATH = (CREDENTIAL_PATH / "gcp_credential.json").as_posix()
 LLAMA2 = "/raid2/domain_ft/models/llama2/Llama-2-13b-chat-hf-slr-qlora-merged-2"
+MAX_TOKEN = 4000
 
 # load tokenizer
 TOKENIZER = LlamaTokenizerFast.from_pretrained(LLAMA2)
@@ -44,8 +45,10 @@ if project_id == "iconic-vine-398108":
 set_llm_cache(InMemoryCache())
 
 CHUNK_SIZE = 3000
-COMMUNITY_SIZE = CHUNK_SIZE / 2
+SPLIT_RATIO = 0.8
 SUMMARY_SIZE = 300
+TEM = 0.01
+TOP_K = 2
 
 # test samples
 DOCS = list()
@@ -57,3 +60,22 @@ samples = [
 for s in samples:
     doc = Document(page_content=s, metadata={"source": "local"})
     DOCS.append(doc)
+
+
+# utility function
+def get_num_of_tokens(text: str) -> int:
+    """get No. of tokens in the text"""
+    return len(TOKENIZER.tokenize(text))
+
+
+# remove all indexes for each paragraph
+def remove_index(text: str, split_pattern: str, index_pattern: str, delim: str) -> str:
+    new = list()
+    for p in re.split(split_pattern, text):
+        m = re.match(index_pattern, p)
+        if m:
+            start = len(m.group(0))
+            new.append(p[start:])
+        else:
+            new.append(p)
+    return delim.join(new)

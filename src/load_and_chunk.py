@@ -3,21 +3,20 @@ import os
 import pickle
 import re
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 
 import matplotlib.pyplot as plt
 import networkx as nx
 import numpy as np
 import pydash
 import streamlit as st
+from config import config
 # from langchain.embeddings import VertexAIEmbeddings
 from langchain.schema.embeddings import Embeddings
 from langchain.text_splitter import (CharacterTextSplitter,
                                      RecursiveCharacterTextSplitter)
 from networkx.algorithms import community
 from scipy.spatial.distance import cosine
-
-from config import config
 from utilities.custom_logger import CustomLogger
 
 logger = CustomLogger()
@@ -26,7 +25,7 @@ logger = CustomLogger()
 @dataclass
 class ProcessingPipeline:
     embeddings: Embeddings
-    num_of_tokens: Optional[int] = None
+    total_num_of_tokens: Optional[int] = None
 
     def process_document(self, document: str) -> List[str]:
         """process a long document into list of shorter chunks, where each chunk has a unique topic
@@ -37,9 +36,60 @@ class ProcessingPipeline:
         Returns:
             List[str]: list of chunks
         """
-        chunks = self.split_document(document)
-        # embedding_dict = self.get_embeddings(paragraphs)
-        # chunks = self.cluster_similar_chunks(embedding_dict)
+        # remove sub-headers
+        document = "\n\n".join([p if self.is_paragraph(p) else "\n\n" for p in document.split("\n\n")])
+
+        self.total_num_of_tokens = self.get_num_of_tokens(document)
+
+        # split documents into chunks based on its original paragraphing
+        chunks = [ch for ch in re.split(r"[\n]{3,}", document) if len(ch) > 0]
+        chunks = [config.remove_index(chunk, "[\\n]{2,}", "(\\d+ *)", "\n\n") for chunk in chunks]
+
+        # ensure No. of tokens in each chunk < max context window
+        chunks_require_split = list()
+        for i, chunk in enumerate(chunks):
+            chunk_len = self.get_num_of_tokens(chunk)
+            logger.info(f"number of tokens for {i}th chunk is: {chunk_len}")
+            if chunk_len > config.CHUNK_SIZE:
+                chunks_require_split.append(i)
+
+        if len(chunks_require_split) == 0:
+            return chunks
+
+        logger.info(f"long chunks require to be splitted are: {chunks_require_split}")
+
+        apply_clsutering = True
+
+        for i in chunks_require_split:
+            if not apply_clsutering:
+                text_splitter = CharacterTextSplitter().\
+                    from_huggingface_tokenizer(
+                    config.TOKENIZER,
+                    chunk_size=config.CHUNK_SIZE // 2,
+                    chunk_overlap=0,
+                    separator="\n\n",
+                    keep_separator=True
+                )
+                chunks[i] = text_splitter.split_text(chunks[i])
+
+            else:
+                segments = chunks[i].split("\n\n")
+                if len(segments) <= 2:
+                    if len(segments) < 2:
+                        raise Exception("paragraph - {i} is too long and cannot be split")
+                    chunks[i] = segments
+                else:
+                    logger.info(f"partition the {i}th chunk due to large size:")
+                    chunks[i] = self.partition_segments(segments)
+                    logger.info(f"partition for the {i}th chunk is completed")
+
+        chunks = pydash.flatten_deep(chunks)
+
+        length_max = max([self.get_num_of_tokens(ch) for ch in chunks])
+        length_min = min([self.get_num_of_tokens(ch) for ch in chunks])
+
+        logger.info(f"After splitting by paragrah:\ntotal No. of chunks: {len(chunks)}, max length: {length_max}, min length: {length_min}")
+
         return chunks
 
     @staticmethod
@@ -54,84 +104,88 @@ class ProcessingPipeline:
         else:
             return True
 
-    def split_document(self, document: str) -> List[str]:
-        """split the document into chunks with shorter length, this is document-specific.
+    def partition_segments(self, segments: List[str]) -> List[str]:
+        """To partition a large chunk, we first split the chunk into paragraphs, each paragraph is called a segment here. then
+        we follow the algorithms below:
+            1. search for any segment with length > config.CHUNK_SIZE
+            2. consider the long segment as the original splitting points
+            3. aggregate the rest of segments by text embedding and Louvain
+            Community Detection Algorithm
+            4. return partitions with texts
 
         Args:
-            document (str): document, a long text
+            segments (List[str]): list of paragraphs
 
         Returns:
-            List[str]: a list of chunks
+            List[str]: list of texts with length < config.CHUNK_SIZE
         """
-        # remove sub-headers
-        document = "\n\n".join([p if self.is_paragraph(p) else "\n\n" for p in document.split("\n\n")])
+        long = []
+        for i, sub in enumerate(segments):
+            sub_len = self.get_num_of_tokens(sub)
+            logger.info(f"length of {i}th sub-chunk is {sub_len}")
+            if sub_len > config.CHUNK_SIZE:
+                # TODO:
+                pass
+            elif sub_len > config.CHUNK_SIZE * config.SPLIT_RATIO:
+                long.append(i)
 
-        self.num_of_tokens = self.get_num_of_tokens(document)
+        def group_similar_segments(segments: List[str]) -> List[Set[int]]:
+            embedding_dict = self.get_embeddings(segments)
+            long = self.cluster_similar_chunks(embedding_dict)
 
-        # split documents into chunks based on its original chunking
-        chunks = [ch for ch in re.split(r"[\n]{3,}", document) if len(ch) > 0]
+            return long
 
-        # ensure No. of tokens in each chunk < max context window
-        chunks_require_split = list()
-        for i, chunk in enumerate(chunks):
-            if self.get_num_of_tokens(chunk) > config.CHUNK_SIZE:
-                chunks_require_split.append(i)
-
-        if len(chunks_require_split) == 0:
+        chunks = list()
+        if len(long) == 0:
+            clsuters = group_similar_segments(segments)
+            for idx, clu in enumerate(clsuters):
+                chunk = "\n\n".join([segments[i] for i in clu])
+                logger.info(f"after partitioning, the length of {idx}th sub-chunk is {self.get_num_of_tokens(chunk)}")
+                chunks.append(chunk)
             return chunks
 
-        # for chunks that need to be split, split them by original paragraphs and cluster by embedding
-        text_splitter = CharacterTextSplitter().\
-            from_huggingface_tokenizer(
-            config.TOKENIZER,
-            chunk_size=config.CHUNK_SIZE,
-            chunk_overlap=0,
-            separator="\n\n",
-            keep_separator=True
-        )
+        res = list()  # create a list to contain partitions
+        segs = set()  # create a set to contain the elements of a cluster
+        for i in range(len(segments)):
+            if i in long:
+                # add the previous cluster
+                start = min(segs)
+                end = max(segs) + 1
+                clusters_ = group_similar_segments(segments[start:end])
+                clusters = list()
+                ori = range(start, end)
+                for clu in clusters_:
+                    clusters.append([ori[i] for i in clu])
+                res.extend(clusters)
 
-        for i in chunks_require_split:
-            segments = text_splitter.split_text(chunks[i])
-            if len(segments) <= 2:
-                chunks[i] = segments
+                # add the existing singleton
+                res.append([i])
+
+                # reset segs
+                segs = set()
             else:
-                chunks[i] = self.cluster_segments(segments)
+                segs.add(i)
 
-        # split the chunk into smaller segments
-        chunks = pydash.flatten_deep(chunks)
+        if len(segs) != 0:
+            start = min(segs)
+            end = max(segs) + 1
+            clusters_ = group_similar_segments(segments[start:end])
+            # map
+            clusters = list()
+            ori = range(start, end)
+            for clu in clusters_:
+                clusters.append([ori[i] for i in clu])
+            res.extend(clusters)
 
-        length_max = max([self.get_num_of_tokens(ch) for ch in chunks])
-        length_min = min([self.get_num_of_tokens(ch) for ch in chunks])
+        # del segs, ori, clusters_
 
-        logger.info(f"After splitting by paragrah:\ntotal No. of chunks: {len(chunks)}, max length: {length_max}, min length: {length_min}")
-
-        # # apply recursive character split each chunk into paragraphs
-        # text_splitter = RecursiveCharacterTextSplitter(
-        #     keep_separator=False,
-        #     chunk_size=(config.CHUNK_SIZE / 2),
-        #     chunk_overlap=50,
-        #     length_function=self.get_num_of_tokens,
-        #     is_separator_regex=False,
-        #     separators=["\n\n", "\n", ". "],
-        # )
-
-        # paragraphs = [s.page_content for s in text_splitter.create_documents(chunks)]
-
-        # # get the statistics of setences
-        # length_max = max([self.get_num_of_tokens(s) for s in paragraphs])
-        # length_min = min([self.get_num_of_tokens(s) for s in paragraphs])
-
-        # logger.info(f"After splitting by sentence:\ntotal No. of paragraphs: {len(paragraphs)}, max length: {length_max}, min length: {length_min}")
+        # map indexes back to texts
+        for idx, clu in enumerate(res):
+            chunk = "\n\n".join([segments[i] for i in clu])
+            logger.info(f"after partitioning, the length of {idx}th sub-chunk is {self.get_num_of_tokens(chunk)}")
+            chunks.append(chunk)
 
         return chunks
-
-    def cluster_segments(self, segments: List[str]) -> List[str]:
-        """group short segments into longer segments with similar semantic meaning by embedding"""
-        embedding_dict = self.get_embeddings(segments)
-        num_of_tokens = self.get_num_of_tokens("".join(segments))
-        segments = self.cluster_similar_chunks(embedding_dict, num_of_tokens)
-
-        return segments
 
     def get_embeddings(self, paragraphs: List[str]) -> Dict[str, Dict]:
         """embeddings for each paragraph.
@@ -153,24 +207,24 @@ class ProcessingPipeline:
                 "text": para,
                 "embedding": sen_embedding
                 }
-
+        logger.info("embedding completed")
         # with open(config.OUT_PATH / "embedding_paragraph.json", "w") as f:
         #     json.dump(embedding_dict, f, indent=2)
 
         # load embeddings and get the similarity matrix for assessment
-        with open(config.OUT_PATH / "embedding_paragraph.json", "r") as f:
-            embedding_dict = json.load(f)
+        # with open(config.OUT_PATH / "embedding_paragraph.json", "r") as f:
+        #     embedding_dict = json.load(f)
 
         return embedding_dict
 
-    def cluster_similar_chunks(self, embedding_dict: Dict[str, Dict], num_of_tokens) -> List:
+    def cluster_similar_chunks(self, embedding_dict: Dict[str, Dict]) -> List[Set[int]]:
         """
         cluster chunks into 1 if they share similar semantic meaning
         Args:
             embedding_dict (Dict[str, Dict]): embeddings
 
         Returns:
-            List: list of chunks
+            List: list of chunk indexes
         """
         # Get similarity matrix between the embeddings of the sentences' embeddings
         summary_similarity_matrix = np.zeros((len(embedding_dict), len(embedding_dict)))
@@ -187,39 +241,20 @@ class ProcessingPipeline:
         plt.imshow(summary_similarity_matrix, cmap='Blues')
         plt.savefig(config.OUT_PATH / "similarity_matrix_paragraph.jpg")
 
-        num_topics = num_of_tokens // config.COMMUNITY_SIZE
-        topics_out = self.get_topics(
+        partitions = self.get_topics(
+            [t["text"] for t in embedding_dict.values()],
             summary_similarity_matrix,
-            num_topics=num_topics,
-            bonus_constant=0.2,
-            min_size=10)
-        chunk_topics = topics_out['chunk_topics']
-        topics = topics_out['topics']
-
-        # Plot a heatmap of this array
-        plt.figure(figsize=(10, 4))
-        plt.imshow(np.array(chunk_topics).reshape(1, -1), cmap='tab20')
-        # Draw vertical black lines for every 1 of the x-axis
-        for i in range(1, len(chunk_topics)):
-            plt.axvline(x=i - 0.5, color='black', linewidth=0.5)
-
-        plt.savefig(config.OUT_PATH / "clustering_paragraph.jpg")
-
-        chunks = list()
-        for chu_ids in topics:
-            chunk = "\n".join([embedding_dict[str(i)]["text"] for i in chu_ids])
-            chunks.append(chunk)
+            bonus_constant=0.2)
 
         # with open(config.OUT_PATH / "chunks", "wb") as fp:
         #     pickle.dump(chunks, fp)
 
-        return chunks
+        return partitions
 
     def get_topics(self,
+                   texts: List[str],
                    similarity_matrix: np.ndarray,
-                   num_topics: int=8,
-                   bonus_constant: float=0.25,
-                   min_size: int=3) -> Dict[str, List]:
+                   bonus_constant: float = 0.25) -> List[Set[int]]:
         """calculate if chunks belong to same cluster based on louvain community detection algorithm
 
         Args:
@@ -227,7 +262,6 @@ class ProcessingPipeline:
             num_topics (int, optional): number of chunks in the end. Defaults to 8.
             bonus_constant (float, optional): Defaults to 0.25. This adds additional similarity score
             to the embedding's consine similarity if the two sentences are near. The purpose is to encourage contiguous clustering.
-            min_size (int, optional): minimum size of a chunk. Defaults to 3.
 
         Returns:
             _type_: _description_
@@ -244,54 +278,32 @@ class ProcessingPipeline:
 
         similarity_matrix = nx.from_numpy_array(similarity_matrix)
 
-        desired_num_topics = num_topics
         # Store the accepted partitionings
-        topics_title_accepted = []
+        resolution = 0.01  # increase resolution will favour smaller community
+        resolution_step = 0.001
+        partitions = []
 
-        resolution = 0.85  # increase resolution will favour smaller community
-        resolution_step = 0.01
-        iterations = 40
+        def is_partition_correct(partitions: List[Set], texts: List[str], thresh: int) -> bool:
+            if len(partitions) == 0:
+                return False
 
-        # Find the resolution that gives the desired number of topics
-        topics_title = []
-        while len(topics_title) not in [desired_num_topics, desired_num_topics+1, desired_num_topics+2]:
-            topics_title = community.louvain_communities(similarity_matrix, resolution=resolution, seed=1)
+            for par in partitions:
+                cluster = "\n\n".join([texts[p] for p in par])
+                cluster_len = self.get_num_of_tokens(cluster)
+                if cluster_len >= thresh:
+                    return False
+
+            return True
+
+        while not is_partition_correct(partitions, texts, config.CHUNK_SIZE):
+            partitions = community.louvain_communities(
+                G=similarity_matrix,
+                resolution=resolution,
+                seed=1)
             resolution += resolution_step
-        topic_sizes = [len(c) for c in topics_title]
-        sizes_sd = np.std(topic_sizes)
+        logger.info(f"successfully partitioned text into {partitions}")
 
-        lowest_sd_iteration = 0
-        # Set lowest sd to inf
-        lowest_sd = float('inf')
-
-        for i in range(iterations):
-            topics_title = community.louvain_communities(similarity_matrix, weight='weight', resolution=resolution, seed=1)
-
-            # Check SD
-            topic_sizes = [len(c) for c in topics_title]
-            sizes_sd = np.std(topic_sizes)
-
-            topics_title_accepted.append(topics_title)
-
-            if sizes_sd < lowest_sd and min(topic_sizes) < min_size:
-                lowest_sd_iteration = i
-                lowest_sd = sizes_sd
-
-        # Set the chosen partitioning to be the one with highest modularity
-        topics_title = topics_title_accepted[lowest_sd_iteration]
-        logger.info(f'Best SD: {lowest_sd}, Best iteration: {lowest_sd_iteration}')
-
-        topic_id_means = [sum(e)/len(e) for e in topics_title]
-        # Arrange title_topics in order of topic_id_means
-        topics_title = [list(c) for _, c in sorted(zip(topic_id_means, topics_title), key = lambda pair: pair[0])]
-        # Create an array denoting which topic each chunk belongs to
-        chunk_topics = [None] * similarity_matrix.shape[0]
-        for i, c in enumerate(topics_title):
-            for j in c:
-                chunk_topics[j] = i
-
-        return {'chunk_topics': chunk_topics,
-                'topics': topics_title}
+        return partitions
 
 # gcloud init:
 # https://cloud.google.com/sdk/docs/initializing
