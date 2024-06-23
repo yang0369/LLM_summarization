@@ -1,6 +1,6 @@
+from difflib import SequenceMatcher
 from typing import List
 
-import streamlit as st
 from langchain.chains import MapReduceDocumentsChain, ReduceDocumentsChain
 from langchain.chains.combine_documents.stuff import StuffDocumentsChain
 from langchain.chains.llm import LLMChain
@@ -8,11 +8,11 @@ from langchain.chat_models import ChatVertexAI
 from langchain.docstore.document import Document
 from langchain.embeddings import VertexAIEmbeddings
 from langchain.prompts import PromptTemplate
-from difflib import SequenceMatcher
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 
 from config import config
 from load_and_chunk import ProcessingPipeline
+# from project.src.search.util.util_eval import post_process
 from utilities.custom_logger import CustomLogger
 
 logger = CustomLogger()
@@ -134,10 +134,11 @@ def summarize_long_text_by_langchain(_docs: List[Document]) -> str:
     return summary['output_text'].strip()
 
 
+import torch
 # OPTION_2: BY CUSTOM WAY
 # @st.cache_data
-from transformers import LlamaTokenizerFast, LlamaForCausalLM
-import torch
+from transformers import LlamaForCausalLM, LlamaTokenizerFast
+
 
 def summarize_long_text_by_custom(_docs: List[Document], max_tokens) -> str:
 
@@ -293,10 +294,10 @@ def summarize_long_text_by_custom(_docs: List[Document], max_tokens) -> str:
     return sum_gen_d
 
 
+import torch
 # OPTION_3: BY finetuned LLAMA2
 # @st.cache_data
-from transformers import LlamaTokenizerFast, LlamaForCausalLM
-import torch
+from transformers import LlamaForCausalLM, LlamaTokenizerFast
 
 
 def summarize_long_text_by_llama2(_docs: List[Document]) -> str:

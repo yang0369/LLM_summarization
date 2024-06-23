@@ -6,7 +6,7 @@ from langchain.embeddings import VertexAIEmbeddings
 from streamlit.components.v1 import html
 
 from load_and_chunk import ProcessingPipeline
-from summarize_long import summarize_long_text_by_custom
+from summarize_long import summarize_long_text_by_langchain
 import time
 
 st.title('Trailblazer Demo: Long Text Summarization')
@@ -40,7 +40,7 @@ if if_summarise and len(input_text) > 0:
         else:
             split_docs = [Document(page_content=input_text, metadata={"source": "local"})]
 
-        summary = summarize_long_text_by_custom(split_docs)
+        summary = summarize_long_text_by_langchain(split_docs)
         end = time.time()
 
         st.divider()
